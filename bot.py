@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 from typing import Dict, List, Tuple
 from aiogram import Bot, Dispatcher, types, F
@@ -10,19 +11,33 @@ from aiogram.types import ContentType
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
-import asyncio
 
 # ==================== ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ====================
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Токен будет передан через переменные окружения
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(','))) if os.getenv("ADMIN_IDS") else []
-
-# Для Render нужно указать URL вашего сервиса (будет получен из переменной окружения RENDER_EXTERNAL_URL)
 BASE_URL = os.getenv("RENDER_EXTERNAL_URL", "https://ваш-сервис.onrender.com")
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = BASE_URL + WEBHOOK_PATH
+DATA_FILE = "materials.json"
 
 # ==================== ХРАНЕНИЕ ДАННЫХ ====================
 materials: Dict[int, List[Tuple[str, str]]] = {}
+
+def load_materials():
+    global materials
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+            # преобразуем ключи в int, значения оставляем как есть
+            materials = {int(k): v for k, v in raw.items()}
+    except FileNotFoundError:
+        materials = {}
+
+def save_materials():
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(materials, f, ensure_ascii=False, indent=2)
+
+load_materials()  # загружаем при старте
 
 logging.basicConfig(level=logging.INFO)
 
@@ -123,6 +138,7 @@ async def handle_file_upload(message: types.Message, state: FSMContext):
     if task_id not in materials:
         materials[task_id] = []
     materials[task_id].append((file_type, file_id))
+    save_materials()  # сохраняем после каждого добавления
 
     await message.reply(f"✅ Файл добавлен к заданию {task_id}. Можете отправить ещё файл или /done для завершения.")
 
@@ -137,6 +153,20 @@ async def cmd_checkme(message: types.Message):
         await message.reply("✅ Вы администратор.")
     else:
         await message.reply("❌ Вы не администратор.")
+
+@dp.message(Command("list"))
+async def cmd_list(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.reply("⛔ У вас нет прав администратора.")
+        return
+    if not materials:
+        await message.reply("📭 Нет загруженных материалов.")
+        return
+    lines = ["📋 Список заданий с материалами:"]
+    for task_id in sorted(materials.keys()):
+        count = len(materials[task_id])
+        lines.append(f"Задание {task_id}: {count} файл(ов)")
+    await message.reply("\n".join(lines))
 
 @dp.message()
 async def handle_unknown(message: types.Message):
